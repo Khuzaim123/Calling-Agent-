@@ -1,0 +1,63 @@
+{
+  "id": "vaWfErrors000001",
+  "name": "VA Error Handler",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "3ed40f37-5d99-538f-83f3-4899114fe206",
+      "name": "On workflow error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH r AS (SELECT $1::jsonb AS j)\nINSERT INTO va.workflow_errors (workflow_name, node_name, message, execution_id)\nSELECT left(r.j->>'workflow', 200), left(r.j->>'node', 200), left(r.j->>'message', 2000), left(r.j->>'execution', 100) FROM r\nRETURNING id",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify({ workflow: ($json.workflow || {}).name, node: ($json.execution || {}).lastNodeExecuted, message: (($json.execution || {}).error || {}).message, execution: ($json.execution || {}).id }) ] }}"
+        }
+      },
+      "id": "61523f50-4a9a-5f61-abaa-b31033d63f27",
+      "name": "Log error",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        480,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "vaPgApp000000001",
+          "name": "VA Postgres (va_app)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "On workflow error": {
+      "main": [
+        [
+          {
+            "node": "Log error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

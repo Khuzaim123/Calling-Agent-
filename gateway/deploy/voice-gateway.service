@@ -1,0 +1,14 @@
+[Unit]
+Description=Redmi 9C Bluetooth HFP gateway for the AI voice agent
+After=pipewire.service pipewire-pulse.service wireplumber.service
+Wants=pipewire.service pipewire-pulse.service wireplumber.service
+
+[Service]
+EnvironmentFile=%h/.config/voice-gateway/env
+WorkingDirectory=__REPO__
+ExecStart=%h/.local/share/voice-gateway/venv/bin/python -m gateway run --config %h/.config/voice-gateway/gateway.yaml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

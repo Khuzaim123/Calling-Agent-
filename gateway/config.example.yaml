@@ -1,0 +1,26 @@
+# Copy to ~/.config/voice-gateway/gateway.yaml on the gateway box and edit.
+# Secrets are NOT stored here: VOICE_ENGINE_GATEWAY_TOKEN comes from the environment
+# (~/.config/voice-gateway/env, read by the systemd unit).
+
+engine_url: ""                 # e.g. https://abc-def.trycloudflare.com (printed by notebook cell 17); or set
+                               # VOICE_GATEWAY_ENGINE_URL in the env file (quick-tunnel URLs change per session)
+token_env: VOICE_ENGINE_GATEWAY_TOKEN
+line_name: redmi9c-ufone
+phone_bt_address: "AA:BB:CC:DD:EE:FF"   # Redmi 9C: Settings > About phone > All specs > Bluetooth address
+rate: 16000                    # must equal telephony.phone_rate in config/voice_engine.yaml
+frame_ms: 20
+playout_latency_ms: 60
+audio_wait_s: 8
+
+policy:
+  # Your personal SIM pays for every outbound minute. Start with an allowlist of your own test numbers.
+  outbound_mode: allowlist     # off | allowlist | pakistan (any valid PK number except 0900 premium)
+  outbound_allowlist: ["03xxxxxxxxx"]
+  # Calls from numbers NOT listed here ring on the phone as normal and are never reported anywhere.
+  inbound_mode: allowlist      # off | allowlist | all
+  inbound_allowlist: ["03xxxxxxxxx"]
+  answer_after_s: 6            # rings first, so you can still pick up yourself
+  max_call_seconds: 300
+  max_outbound_per_hour: 6
+  max_outbound_minutes_per_day: 30
+  dial_timeout_s: 45

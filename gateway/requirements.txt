@@ -1,0 +1,4 @@
+# Gateway box (Debian 13 / Python 3.13). Versions checked on PyPI 2026-11-07, all >= 2 weeks old.
+aiohttp==3.14.5
+dbus-fast==5.2.0
+pyyaml==6.0.3

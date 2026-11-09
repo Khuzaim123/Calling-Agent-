@@ -1,0 +1,402 @@
+{
+  "id": "vaWfSessEnd00001",
+  "name": "VA Session End",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "voice/session-end",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "8e0fff5d-1db8-50c7-8e51-6bcb4e7607c9",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "03488f8b-e20c-5527-87d8-05a471565908"
+    },
+    {
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "value": "={{ String($json.headers['x-va-timestamp'] || '') + '.' + String(($json.body || {}).payload || '') }}",
+        "dataPropertyName": "expected_sig",
+        "encoding": "hex"
+      },
+      "id": "a46558c8-4f79-5525-94e4-9093b5746f5a",
+      "name": "HMAC",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "credentials": {
+        "crypto": {
+          "id": "vaHmacSecret0001",
+          "name": "VA webhook HMAC"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verify the voice engine's HMAC (computed by the HMAC node) and timestamp, then parse the payload.\nconst it = $input.first().json;\nconst h = it.headers || {};\nconst sig = String(h['x-va-signature'] || '');\nconst exp = String(it.expected_sig || '');\nlet diff = sig.length === exp.length && sig.length === 64 ? 0 : 1;\nfor (let i = 0; i < Math.min(sig.length, exp.length); i++) diff |= sig.charCodeAt(i) ^ exp.charCodeAt(i);\nconst ts = Number(h['x-va-timestamp']);\nconst fresh = Number.isFinite(ts) && Math.abs(Date.now() / 1000 - ts) <= 300;\nlet req = null;\nif (diff === 0 && fresh) {\n  try { req = JSON.parse(String((it.body || {}).payload || '')); } catch (e) { req = null; }\n}\nconst ok = diff === 0 && fresh && req !== null && typeof req === 'object' && !Array.isArray(req);\nreturn [{ json: {\n  ok,\n  req: ok ? req : null,\n  idem: String(h['x-va-idempotency-key'] || '').slice(0, 200),\n  reason: ok ? '' : (diff !== 0 ? 'bad signature' : !fresh ? 'stale or missing timestamp' : 'payload is not a JSON object'),\n} }];\n"
+      },
+      "id": "808ab0fb-a1c6-5fb9-afc1-52fd124d89d0",
+      "name": "Verify request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 2,
+        "output": "={{ $json.ok ? 0 : 1 }}"
+      },
+      "id": "dbdc62db-5c92-5fc7-ae58-71104c6ec35f",
+      "name": "Authorized?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, error: $json.reason }) }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "298f6c0e-8510-5124-9d29-f2cccd32a3e0",
+      "name": "Reject",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1200,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "function normPhone(p) {\n  let n = String(p || '').replace(/[\\s\\-()]/g, '');\n  if (!n) return null;\n  if (n.startsWith('00')) n = '+' + n.slice(2);\n  else if (n.startsWith('0')) n = '+92' + n.slice(1);\n  else if (n.startsWith('92')) n = '+' + n;\n  return /^\\+[1-9][0-9]{6,14}$/.test(n) ? n : null;\n}\nconst UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\n\nconst r = $input.first().json.req;\nif (!UUID_RE.test(String(r.business_id || '')) || !r.session_id) {\n  return [{ json: { valid: false, response: { ok: false, error: 'business_id and session_id are required' } } }];\n}\nconst transcript = (Array.isArray(r.transcript) ? r.transcript : []).slice(0, 500)\n  .filter(t => t && (t.role === 'user' || t.role === 'assistant') && typeof t.text === 'string')\n  .map(t => ({ role: t.role, text: t.text.slice(0, 4000), language: ['en', 'ur'].includes(t.language) ? t.language : null,\n               interrupted: Boolean(t.interrupted), t: Number(t.t) || null }));\nreturn [{ json: { valid: true, business_id: r.business_id, session_id: String(r.session_id),\n  ended_at: Number(r.ended_at) || Date.now() / 1000, end_reason: String(r.end_reason || '').slice(0, 120),\n  turns: Number.isInteger(r.turns) ? r.turns : 0, transcript } }];\n"
+      },
+      "id": "c8ae118e-9778-5cad-8c5d-a9eb1a6aa8c6",
+      "name": "Prepare report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 2,
+        "output": "={{ $json.valid ? 0 : 1 }}"
+      },
+      "id": "aa5d15b6-39af-5cdb-b521-2a7dd76c7622",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        1440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH r AS (SELECT $1::jsonb AS j),\nc AS (\n  UPDATE va.calls SET status = 'ended', ended_at = to_timestamp((r.j->>'ended_at')::float8),\n         end_reason = r.j->>'end_reason', turns = (r.j->>'turns')::int\n  FROM r\n  WHERE va.calls.id = r.j->>'session_id' AND va.calls.business_id::text = r.j->>'business_id'\n  RETURNING va.calls.id, va.calls.business_id, va.calls.started_at, va.calls.ended_at, va.calls.customer_id),\nt AS (\n  INSERT INTO va.transcripts (business_id, call_id, seq, role, text, language, interrupted, spoken_at)\n  SELECT c.business_id, c.id, (e.ord - 1)::int, e.v->>'role', e.v->>'text', e.v->>'language',\n         COALESCE((e.v->>'interrupted')::boolean, false), to_timestamp(NULLIF(e.v->>'t', '')::float8)\n  FROM c, r, jsonb_array_elements(r.j->'transcript') WITH ORDINALITY AS e(v, ord)\n  ON CONFLICT (call_id, seq) DO NOTHING\n  RETURNING 1),\nu AS (\n  INSERT INTO va.usage_records (business_id, call_id, kind, quantity)\n  SELECT c.business_id, c.id, k.kind, k.q\n  FROM c, r, LATERAL (VALUES ('call_seconds', GREATEST(0, extract(epoch FROM c.ended_at - c.started_at))::numeric),\n                             ('turns', COALESCE((r.j->>'turns')::numeric, 0))) AS k(kind, q)\n  ON CONFLICT (call_id, kind) DO NOTHING\n  RETURNING 1)\nSELECT (SELECT count(*) FROM c) AS calls_updated, (SELECT count(*) FROM t) AS lines,\n       (SELECT customer_id FROM c) AS customer_id, (SELECT business_id FROM c) AS business_id",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json) ] }}"
+        }
+      },
+      "id": "702e910b-a4bb-56b6-bc30-d1a4169a88c7",
+      "name": "Save call",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        1680,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "vaPgApp000000001",
+          "name": "VA Postgres (va_app)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: Number($json.calls_updated) > 0, lines: Number($json.lines) }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "e53b0a84-1c60-527e-ab97-198cf46c9b76",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1920,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.response) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "ebec8bd3-c0d5-564a-a214-f304fac1fc62",
+      "name": "Respond invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1920,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Post-call processing: ask the local LLM for a short summary + anything worth remembering.\nconst saved = $('Save call').first().json;\nconst p = $('Prepare report').first().json;\nif (!Number(saved.calls_updated) || !p.transcript.length) return [];   // counts arrive as text, e.g. \"0\"\nconst convo = p.transcript.map(t => `${t.role === 'user' ? 'Caller' : 'Agent'}: ${t.text}`).join('\\n').slice(-12000);\nreturn [{ json: { llm_request: {\n  model: 'local', temperature: 0.2, max_tokens: 300,\n  chat_template_kwargs: { enable_thinking: false },\n  response_format: { type: 'json_object' },\n  messages: [\n    { role: 'system', content: 'You summarise phone calls between a business\\'s AI agent and a caller. Reply ONLY with JSON: {\"summary\": \"<at most 3 sentences, English>\", \"outcome\": \"<a few words, e.g. order placed, booking made, question answered, no resolution>\", \"remember\": \"<a lasting caller preference worth remembering, or empty string>\"}' },\n    { role: 'user', content: convo },\n  ] } } }];\n"
+      },
+      "id": "3b1d7c04-f6f5-5eec-9008-529d8c55163e",
+      "name": "Summary request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8081/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.llm_request) }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "id": "086e5c8b-cc04-59ed-9cdf-7bd17b4bf910",
+      "name": "Summarize",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2400,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "vaLlmApiKey00001",
+          "name": "VA LLM key"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $('Prepare report').first().json;\nconst saved = $('Save call').first().json;\nlet s = {};\ntry { s = JSON.parse(((($input.first().json.choices || [])[0] || {}).message || {}).content || '{}'); } catch (e) { s = {}; }\nreturn [{ json: { business_id: p.business_id, session_id: p.session_id, customer_id: saved.customer_id || null,\n  summary: String(s.summary || '').slice(0, 4000), outcome: String(s.outcome || '').slice(0, 200),\n  remember: String(s.remember || '').slice(0, 1000) } }];\n"
+      },
+      "id": "ca2088ea-9c31-579b-94b4-64a24bd52ab3",
+      "name": "Parse summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH r AS (SELECT $1::jsonb AS j),\ns AS (\n  INSERT INTO va.conversation_summaries (call_id, business_id, summary, outcome)\n  SELECT r.j->>'session_id', (r.j->>'business_id')::uuid, r.j->>'summary', NULLIF(r.j->>'outcome', '') FROM r\n  WHERE COALESCE(r.j->>'summary', '') <> ''\n  ON CONFLICT (call_id) DO NOTHING\n  RETURNING 1),\nm AS (\n  INSERT INTO va.customer_memory (business_id, customer_id, kind, content, source_call_id)\n  SELECT (r.j->>'business_id')::uuid, (r.j->>'customer_id')::uuid, k.kind, left(k.txt, 1000), r.j->>'session_id'\n  FROM r, LATERAL (VALUES ('summary', r.j->>'summary'), ('preference', r.j->>'remember')) AS k(kind, txt)\n  WHERE NULLIF(r.j->>'customer_id', '') IS NOT NULL AND COALESCE(k.txt, '') <> '' AND EXISTS (SELECT 1 FROM s)\n  RETURNING 1)\nSELECT (SELECT count(*) FROM s) AS summaries, (SELECT count(*) FROM m) AS memories",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json) ] }}"
+        }
+      },
+      "id": "3fbbd272-b272-5e29-a1d1-92333bb782ff",
+      "name": "Save summary",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        2880,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "vaPgApp000000001",
+          "name": "VA Postgres (va_app)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "HMAC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HMAC": {
+      "main": [
+        [
+          {
+            "node": "Verify request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify request": {
+      "main": [
+        [
+          {
+            "node": "Authorized?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Authorized?": {
+      "main": [
+        [
+          {
+            "node": "Prepare report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare report": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Save call",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save call": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond": {
+      "main": [
+        [
+          {
+            "node": "Summary request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summary request": {
+      "main": [
+        [
+          {
+            "node": "Summarize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize": {
+      "main": [
+        [
+          {
+            "node": "Parse summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse summary": {
+      "main": [
+        [
+          {
+            "node": "Save summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "vaWfErrors000001"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

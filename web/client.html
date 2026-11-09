@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Engine Test</title>
+<style>
+  :root { --bg:#f7f7f5; --fg:#1d1d1b; --muted:#6b6b66; --card:#fff; --line:#e3e3de; --accent:#1f6feb; --user:#eef4ff; --bot:#f1f8ef; --err:#b42318; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#151515; --fg:#ececea; --muted:#9b9b95; --card:#1f1f1f; --line:#333; --accent:#58a6ff; --user:#1b2a40; --bot:#1c2e1d; --err:#ff7b72; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width:760px; margin:0 auto; padding:16px; }
+  h1 { font-size:20px; margin:4px 0 2px; }
+  p.note { color:var(--muted); margin:0 0 12px; font-size:13px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
+  input { flex:1 1 260px; min-width:0; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--fg); }
+  button { padding:8px 16px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--fg); cursor:pointer; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button:disabled { opacity:.5; cursor:default; }
+  #status { font-size:13px; color:var(--muted); }
+  #log { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px; min-height:300px; max-height:60vh; overflow-y:auto; }
+  .msg { padding:6px 10px; border-radius:8px; margin:6px 0; white-space:pre-wrap; word-break:break-word; }
+  .user { background:var(--user); } .assistant { background:var(--bot); }
+  .sys { color:var(--muted); font-size:12px; } .err { color:var(--err); font-size:13px; }
+  [dir=auto] { unicode-bidi: plaintext; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Voice Engine Test Client</h1>
+  <p class="note">Development only. Use headphones, otherwise the agent hears itself and barge-in misfires.
+    The token is read from the URL fragment (<code>#token=...</code>), which browsers never send to the server.</p>
+  <div class="row">
+    <input id="token" type="password" placeholder="VOICE_ENGINE_WS_TOKEN" autocomplete="off">
+    <button id="start" class="primary">Start</button>
+    <button id="stop" disabled>Stop</button>
+  </div>
+  <div class="row"><span id="status">idle</span></div>
+  <div id="log" aria-live="polite"></div>
+</main>
+<script>
+"use strict";
+const IN_RATE = 16000, FRAME = 320; // 20 ms frames to the server
+
+const workletSrc = `
+class Capture extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.ratio = sampleRate / ${IN_RATE};
+    this.win = Math.max(1, Math.round(this.ratio));  // box anti-alias filter width
+    this.hist = new Float32Array(this.win); this.hi = 0; this.sum = 0;
+    this.buf = []; this.pos = 0; this.out = [];
+  }
+  process(inputs) {
+    const ch = inputs[0] && inputs[0][0];
+    if (!ch) return true;
+    for (let k = 0; k < ch.length; k++) {           // moving average then fractional decimation
+      this.sum += ch[k] - this.hist[this.hi]; this.hist[this.hi] = ch[k]; this.hi = (this.hi + 1) % this.win;
+      this.buf.push(this.sum / this.win);
+    }
+    let p = this.pos;
+    while (p + 1 < this.buf.length) {
+      const i = Math.floor(p), f = p - i;
+      this.out.push(this.buf[i] * (1 - f) + this.buf[i + 1] * f);
+      p += this.ratio;
+    }
+    const used = Math.floor(p); this.buf = this.buf.slice(used); this.pos = p - used;
+    while (this.out.length >= ${FRAME}) {
+      const fr = this.out.splice(0, ${FRAME});
+      const pcm = new Int16Array(${FRAME});
+      for (let j = 0; j < ${FRAME}; j++) { const s = Math.max(-1, Math.min(1, fr[j])); pcm[j] = s < 0 ? s * 32768 : s * 32767; }
+      this.port.postMessage(pcm.buffer, [pcm.buffer]);
+    }
+    return true;
+  }
+}
+registerProcessor('capture', Capture);`;
+
+const $ = (id) => document.getElementById(id);
+let ws = null, capCtx = null, playCtx = null, stream = null, node = null;
+let nextTime = 0, sources = [], outRate = 24000, lastAssistant = null;
+
+function line(cls, text) {
+  const d = document.createElement("div"); d.className = "msg " + cls; d.dir = "auto"; d.textContent = text;
+  $("log").appendChild(d); $("log").scrollTop = $("log").scrollHeight; return d;
+}
+function status(t) { $("status").textContent = t; }
+
+function playPcm(buf) {
+  if (!playCtx) return;
+  const pcm = new Int16Array(buf), f = new Float32Array(pcm.length);
+  for (let i = 0; i < pcm.length; i++) f[i] = pcm[i] / 32768;
+  const ab = playCtx.createBuffer(1, f.length, outRate); ab.copyToChannel(f, 0);
+  const src = playCtx.createBufferSource(); src.buffer = ab; src.connect(playCtx.destination);
+  const t = Math.max(playCtx.currentTime + 0.02, nextTime); src.start(t); nextTime = t + ab.duration;
+  sources.push(src); src.onended = () => { sources = sources.filter((s) => s !== src); };
+}
+function clearPlayback() {
+  for (const s of sources) { try { s.stop(); } catch (e) {} }
+  sources = []; nextTime = playCtx ? playCtx.currentTime : 0;
+}
+
+function onEvent(ev) {
+  switch (ev.type) {
+    case "ready":
+      outRate = ev.output_rate;
+      playCtx = new AudioContext({ sampleRate: outRate }); nextTime = 0;
+      status(`connected - ${ev.business} - tools: ${ev.tools.join(", ") || "none"}`); break;
+    case "transcript":
+      if (ev.role === "user") { lastAssistant = null; line("user", (ev.rejected ? `[ignored: ${ev.reason}] ` : "") + `${ev.text}  (${ev.language}, stt ${ev.stt_s}s)`); }
+      else { if (!lastAssistant) lastAssistant = line("assistant", ""); lastAssistant.textContent += (lastAssistant.textContent ? " " : "") + ev.text; }
+      break;
+    case "clear": clearPlayback(); line("sys", "barge-in: playback cleared"); lastAssistant = null; break;
+    case "vad": if (ev.state !== "speech_start") line("sys", "vad: " + ev.state); break;
+    case "tool": line("sys", `tool ${ev.name}: ${ev.ok ? "ok" : "failed"}${ev.fixture ? " (dev fixture)" : ""}`); break;
+    case "metrics": line("sys", `turn ${ev.turn}: stt ${ev.stt_s ?? "-"}s, llm ttft ${ev.llm_ttft_s ?? "-"}s, first audio ${ev.first_audio_s ?? "-"}s after end of speech`); break;
+    case "error": line("err", `error (${ev.where}): ${ev.message}`); break;
+    case "bye": line("sys", "server ended session: " + ev.reason); break;
+  }
+}
+
+async function start() {
+  const token = $("token").value.trim();
+  if (!token) { status("enter the token"); return; }
+  $("start").disabled = true;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  } catch (e) { status("microphone permission denied: " + e.message); $("start").disabled = false; return; }
+  capCtx = new AudioContext();
+  const url = URL.createObjectURL(new Blob([workletSrc], { type: "application/javascript" }));
+  await capCtx.audioWorklet.addModule(url);
+  node = new AudioWorkletNode(capCtx, "capture");
+  capCtx.createMediaStreamSource(stream).connect(node);
+
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  ws = new WebSocket(`${proto}//${location.host}/ws`); ws.binaryType = "arraybuffer";
+  ws.onopen = () => { ws.send(JSON.stringify({ type: "start", token, caller: { client: "browser" } })); status("authenticating..."); };
+  ws.onmessage = (m) => { if (typeof m.data === "string") onEvent(JSON.parse(m.data)); else playPcm(m.data); };
+  ws.onclose = (e) => { status(`closed (${e.code}${e.reason ? ": " + e.reason : ""})`); teardown(); };
+  ws.onerror = () => status("websocket error");
+  node.port.onmessage = (m) => { if (ws && ws.readyState === 1) ws.send(m.data); };
+  $("stop").disabled = false;
+}
+
+function teardown() {
+  if (node) { node.port.onmessage = null; node.disconnect(); node = null; }
+  if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+  if (capCtx) { capCtx.close(); capCtx = null; }
+  if (playCtx) { clearPlayback(); playCtx.close(); playCtx = null; }
+  $("start").disabled = false; $("stop").disabled = true;
+}
+function stop() { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "stop" })); if (ws) ws.close(); teardown(); }
+
+$("start").onclick = start; $("stop").onclick = stop;
+const m = location.hash.match(/token=([^&]+)/); if (m) $("token").value = decodeURIComponent(m[1]);
+</script>
+</body>
+</html>

@@ -1,0 +1,280 @@
+{
+  "id": "vaWfCallEvent001",
+  "name": "VA Call Event",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "voice/call-event",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "5900c162-aa74-590d-9d77-0d31885a29c9",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "f00d9064-e332-53ca-9e71-c62c60907c10"
+    },
+    {
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "value": "={{ String($json.headers['x-va-timestamp'] || '') + '.' + String(($json.body || {}).payload || '') }}",
+        "dataPropertyName": "expected_sig",
+        "encoding": "hex"
+      },
+      "id": "2fc7ec44-4c3d-5c10-b72e-ef5f13bf62f1",
+      "name": "HMAC",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "credentials": {
+        "crypto": {
+          "id": "vaHmacSecret0001",
+          "name": "VA webhook HMAC"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verify the voice engine's HMAC (computed by the HMAC node) and timestamp, then parse the payload.\nconst it = $input.first().json;\nconst h = it.headers || {};\nconst sig = String(h['x-va-signature'] || '');\nconst exp = String(it.expected_sig || '');\nlet diff = sig.length === exp.length && sig.length === 64 ? 0 : 1;\nfor (let i = 0; i < Math.min(sig.length, exp.length); i++) diff |= sig.charCodeAt(i) ^ exp.charCodeAt(i);\nconst ts = Number(h['x-va-timestamp']);\nconst fresh = Number.isFinite(ts) && Math.abs(Date.now() / 1000 - ts) <= 300;\nlet req = null;\nif (diff === 0 && fresh) {\n  try { req = JSON.parse(String((it.body || {}).payload || '')); } catch (e) { req = null; }\n}\nconst ok = diff === 0 && fresh && req !== null && typeof req === 'object' && !Array.isArray(req);\nreturn [{ json: {\n  ok,\n  req: ok ? req : null,\n  idem: String(h['x-va-idempotency-key'] || '').slice(0, 200),\n  reason: ok ? '' : (diff !== 0 ? 'bad signature' : !fresh ? 'stale or missing timestamp' : 'payload is not a JSON object'),\n} }];\n"
+      },
+      "id": "6d11a710-547b-53c9-8977-d3941a6bf7a8",
+      "name": "Verify request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 2,
+        "output": "={{ $json.ok ? 0 : 1 }}"
+      },
+      "id": "e57ee312-dfd8-57d8-bb3c-0fb0d0e1161a",
+      "name": "Authorized?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, error: $json.reason }) }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "135f01e4-20aa-58ea-9d3e-17a945d560ec",
+      "name": "Reject",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1200,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "function normPhone(p) {\n  let n = String(p || '').replace(/[\\s\\-()]/g, '');\n  if (!n) return null;\n  if (n.startsWith('00')) n = '+' + n.slice(2);\n  else if (n.startsWith('0')) n = '+92' + n.slice(1);\n  else if (n.startsWith('92')) n = '+' + n;\n  return /^\\+[1-9][0-9]{6,14}$/.test(n) ? n : null;\n}\nconst UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\n\nconst r = $input.first().json.req;\nconst STATUSES = ['requested', 'dialing', 'alerting', 'incoming', 'active', 'ended', 'failed', 'rejected'];\nif (!r.call_id || !STATUSES.includes(r.status)) {\n  return [{ json: { valid: false, response: { ok: false, error: 'call_id and a valid status are required' } } }];\n}\nconst ctx = (r.context && typeof r.context === 'object') ? r.context : {};\nreturn [{ json: { valid: true, call_id: String(r.call_id).slice(0, 64), status: r.status,\n  reason: String(r.reason || '').slice(0, 120), direction: r.direction === 'outbound' ? 'outbound' : 'inbound',\n  remote_number: String(r.remote_number || '').slice(0, 32),\n  business_id: UUID_RE.test(String(ctx.business_id || '')) ? ctx.business_id : null,\n  job_id: UUID_RE.test(String(ctx.job_id || '')) ? ctx.job_id : null } }];\n"
+      },
+      "id": "c09a47b7-a90a-5882-9657-4ac52568f2bf",
+      "name": "Prepare event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 2,
+        "output": "={{ $json.valid ? 0 : 1 }}"
+      },
+      "id": "5e98194f-e241-59ed-bbf2-4b26fc018dac",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        1440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH r AS (SELECT $1::jsonb AS j),\ne AS (\n  INSERT INTO va.call_events (business_id, gsm_call_id, status, reason, direction, remote_number)\n  SELECT NULLIF(r.j->>'business_id', '')::uuid, r.j->>'call_id', r.j->>'status', NULLIF(r.j->>'reason', ''),\n         r.j->>'direction', NULLIF(r.j->>'remote_number', '')\n  FROM r\n  ON CONFLICT (gsm_call_id, status) DO NOTHING\n  RETURNING 1),\njb AS (\n  UPDATE va.outbound_jobs oj SET\n    gsm_call_id = r.j->>'call_id',\n    status = CASE\n      WHEN r.j->>'status' = 'ended' THEN 'completed'\n      WHEN r.j->>'status' IN ('failed', 'rejected') AND oj.attempts < oj.max_attempts THEN 'pending'\n      WHEN r.j->>'status' IN ('failed', 'rejected') THEN 'failed'\n      ELSE oj.status END,\n    scheduled_at = CASE WHEN r.j->>'status' IN ('failed', 'rejected') THEN now() + interval '15 minutes' ELSE oj.scheduled_at END,\n    last_error = CASE WHEN r.j->>'status' IN ('failed', 'rejected') THEN NULLIF(r.j->>'reason', '') ELSE oj.last_error END\n  FROM r WHERE oj.id::text = r.j->>'job_id' AND oj.business_id::text = r.j->>'business_id'\n  RETURNING 1)\nSELECT (SELECT count(*) FROM e) AS recorded, (SELECT count(*) FROM jb) AS job_updated",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json) ] }}"
+        }
+      },
+      "id": "39984e5b-5a35-5c0d-a96f-ef06ba826df7",
+      "name": "Record event",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        1680,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "vaPgApp000000001",
+          "name": "VA Postgres (va_app)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, recorded: Number($json.recorded) > 0 }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "16619030-489d-5f52-8e11-ce4f12a7a27f",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1920,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.response) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "f45d125a-abf7-54ef-be4b-42b6a013e53f",
+      "name": "Respond invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1920,
+        520
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "HMAC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HMAC": {
+      "main": [
+        [
+          {
+            "node": "Verify request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify request": {
+      "main": [
+        [
+          {
+            "node": "Authorized?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Authorized?": {
+      "main": [
+        [
+          {
+            "node": "Prepare event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare event": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Record event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record event": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "vaWfErrors000001"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

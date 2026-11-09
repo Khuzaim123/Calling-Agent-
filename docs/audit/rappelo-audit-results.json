@@ -1,0 +1,95 @@
+{
+  "repo": "C:\\Users\\Khuzaim\\AppData\\Local\\Temp\\claude\\f932a208c053dcec\\9b6217f1-6d24-49e5-8405-98f0c72267fe\\scratchpad\\audit\\rappelo",
+  "head": "ba389d3 Add InCallService and acoustic audio bridge",
+  "kotlin_files": 59,
+  "pjsip_abis": [
+    "arm64-v8a"
+  ],
+  "audio_sources_tried": [
+    "VOICE_DOWNLINK",
+    "VOICE_CALL",
+    "UNPROCESSED",
+    "MIC"
+  ],
+  "has_accessibility_service": false,
+  "acoustic_bridge": true,
+  "findings": [
+    {
+      "id": "ABI-64ONLY",
+      "severity": "BLOCKER-IF-32BIT",
+      "title": "PJSIP AAR ships only arm64-v8a native libraries",
+      "evidence": "mobile\\app\\libs\\pjsua2.aar jni ABIs = ['arm64-v8a']",
+      "consequence": "On a device whose ro.product.cpu.abilist has no arm64-v8a (Redmi 9C stock MIUI is reported as 32-bit userspace) the APK fails to install or crashes with UnsatisfiedLinkError. PJSIP must be rebuilt for armeabi-v7a."
+    },
+    {
+      "id": "PERM-CAPTURE_AUDIO_OUTPUT",
+      "severity": "HIGH",
+      "title": "android.permission.CAPTURE_AUDIO_OUTPUT is signature|privileged",
+      "evidence": "Declared in AndroidManifest.xml",
+      "consequence": "Cannot be granted to a user-installed app on an unrooted phone; 'adb shell pm grant' rejects it. Code paths depending on it are dead."
+    },
+    {
+      "id": "PERM-MODIFY_PHONE_STATE",
+      "severity": "HIGH",
+      "title": "android.permission.MODIFY_PHONE_STATE is signature|privileged",
+      "evidence": "Declared in AndroidManifest.xml",
+      "consequence": "Cannot be granted to a user-installed app on an unrooted phone; 'adb shell pm grant' rejects it. Code paths depending on it are dead."
+    },
+    {
+      "id": "PERM-PROCESS_OUTGOING_CALLS",
+      "severity": "LOW",
+      "title": "android.permission.PROCESS_OUTGOING_CALLS deprecated in API 29 (use CallRedirectionService)",
+      "evidence": "Declared",
+      "consequence": "Minor."
+    },
+    {
+      "id": "README-ROOT",
+      "severity": "INFO",
+      "title": "README documents system-app install on a rooted device",
+      "evidence": "README.md: 'Deploy as System App (rooted device)'",
+      "consequence": "The authors' own intended deployment for full functionality is root/system-app."
+    },
+    {
+      "id": "AUDIO-SRC",
+      "severity": "BLOCKER",
+      "title": "Call-audio capture falls back to the microphone on unrooted devices",
+      "evidence": "Sources tried: ['VOICE_DOWNLINK', 'VOICE_CALL', 'UNPROCESSED', 'MIC']; privileged-only: ['VOICE_CALL', 'VOICE_DOWNLINK']; fallbacks: ['MIC', 'UNPROCESSED']",
+      "consequence": "Without CAPTURE_AUDIO_OUTPUT the bridge records the physical MIC. Per Android 10 audio-input sharing policy, during a cellular call an ordinary app's capture is silenced unless it is an accessibility service."
+    },
+    {
+      "id": "AUDIO-NO-A11Y",
+      "severity": "BLOCKER",
+      "title": "No AccessibilityService in the app",
+      "evidence": "No AccessibilityService class or manifest declaration found",
+      "consequence": "On Android 10 the only documented non-privileged way to capture mic audio during a voice call is an accessibility service. As written, GSM->SIP audio is expected to be silence on an unrooted Redmi 9C (must be confirmed on device: test T3)."
+    },
+    {
+      "id": "AUDIO-ACOUSTIC",
+      "severity": "BLOCKER-FOR-COMMERCIAL",
+      "title": "Audio bridge is acoustic (speakerphone -> microphone), not line-level",
+      "evidence": "SipAudioBridge.kt: GSM downlink -> speaker -> mic; SIP audio -> AudioTrack(USAGE_MEDIA) -> speaker -> mic -> GSM uplink; AEC and NS explicitly disabled",
+      "consequence": "Both directions pass through a cheap speaker and mic in open air: echo, room noise, feedback, the AI hears its own TTS, and the modem's in-call echo canceller may remove the injected TTS from the uplink. Not acceptable for commercial call quality."
+    },
+    {
+      "id": "AUDIO-8K",
+      "severity": "INFO",
+      "title": "Bridge runs at 8 kHz L16 (narrowband)",
+      "evidence": "SipAudioBridge.sampleRate = 8000",
+      "consequence": "STT accuracy (esp. Urdu) is limited by narrowband audio."
+    },
+    {
+      "id": "CALL-CTRL",
+      "severity": "OK-WITH-CAVEAT",
+      "title": "Call control uses default-dialer InCallService + TelecomManager.placeCall",
+      "evidence": "GatewayInCallService.kt, GsmCallManagerImpl.kt",
+      "consequence": "Answer / place / hang up work without root if the app is the default phone app. The app never requests ROLE_DIALER; the user must set it manually, and MIUI may override it."
+    },
+    {
+      "id": "SRV-DOCKER",
+      "severity": "BLOCKER-IN-COLAB",
+      "title": "SIP server stack is Docker Compose with public UDP ports and a privileged container",
+      "evidence": "UDP mappings: ['${SIP_PORT:-5060}:5060/udp', '5080:5080/udp', '30000-30100:30000-30100/udp', '${STUN_PORT:-3478}:3478/udp', '5349:5349/udp', '49152-49200:49152-49200/udp']",
+      "consequence": "Colab has no Docker daemon and no inbound UDP. Cloudflare Tunnel carries HTTP/TCP, not SIP-over-UDP or RTP. Kamailio/RTPEngine/coturn need a VPS with a public IP."
+    }
+  ]
+}

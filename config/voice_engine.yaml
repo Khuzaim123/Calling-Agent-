@@ -1,0 +1,75 @@
+# Voice engine configuration. Secrets are NOT stored here; *_env keys name
+# environment variables. Relative paths resolve against $VOICE_AGENT_ROOT.
+# Override any value with VE__SECTION__KEY, e.g. VE__STT__MODEL_PATH=...
+
+server:
+  host: 127.0.0.1          # only cloudflared reaches it from outside
+  port: 8765
+  ws_token_env: VOICE_ENGINE_WS_TOKEN
+  max_sessions: 2          # T4: STT/TTS are serialised; raise only after load testing
+  max_session_seconds: 900
+  max_frame_bytes: 8192
+  max_frames_per_second: 100
+  serve_test_client: true
+
+vad:
+  threshold: 0.5
+  neg_threshold: 0.35
+  min_speech_ms: 160
+  end_silence_ms: 650
+  preroll_ms: 300
+  max_utterance_s: 20
+  barge_in_min_speech_ms: 280
+
+stt:
+  model_path: models/stt/faster-whisper-large-v3-turbo
+  device: cuda
+  compute_type: int8_float16
+  beam_size: 1
+  default_language: auto
+  allowed_languages: [en, ur]
+  no_speech_threshold: 0.6
+  min_avg_logprob: -1.2
+
+llm:
+  base_url: http://127.0.0.1:8081/v1
+  model: local
+  api_key_env: LLM_API_KEY
+  max_tokens: 220
+  temperature: 0.4
+  timeout_s: 30
+  max_tool_rounds: 3
+  history_char_budget: 6000
+  chat_template_kwargs: {enable_thinking: false}
+
+tts:
+  engine_by_language: {en: kokoro, ur: mms}
+  device: cuda
+  kokoro_voice: af_heart
+  kokoro_lang_code: a
+  kokoro_repo: hexgrad/Kokoro-82M
+  mms_model_path: models/tts/mms-tts-urd-script_arabic
+  mms_model_path_en: models/tts/mms-tts-eng
+  azure_region: ""
+  azure_key_env: AZURE_SPEECH_KEY
+
+business:
+  gateway: static          # Phase 4 dev fixtures; switch to n8n in Phase 7
+  static_file: config/dev_business.yaml
+  n8n_base_url: http://127.0.0.1:5678/webhook
+  hmac_secret_env: N8N_WEBHOOK_HMAC_SECRET
+  timeout_s: 8
+  retries: 2
+
+output:
+  browser_rate: 24000
+
+telephony:                 # Redmi 9C via the Bluetooth HFP gateway (gateway/); see docs/telephony-redmi9c-gateway.md
+  enabled: true
+  gateway_token_env: VOICE_ENGINE_GATEWAY_TOKEN
+  calls_token_env: VOICE_ENGINE_CALLS_TOKEN
+  phone_rate: 16000
+
+log:
+  dir: logs/voice_engine
+  level: INFO

@@ -1,0 +1,991 @@
+{
+  "id": "vaWfTool00000001",
+  "name": "VA Tool",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "voice/tool",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "01a565a0-2125-58c9-b80f-89f149def5f2",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "6e8230b4-09d7-565a-b891-e6d6a0c58391"
+    },
+    {
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "value": "={{ String($json.headers['x-va-timestamp'] || '') + '.' + String(($json.body || {}).payload || '') }}",
+        "dataPropertyName": "expected_sig",
+        "encoding": "hex"
+      },
+      "id": "75136bd5-0b12-5b4b-8a64-dee1e1563b68",
+      "name": "HMAC",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "credentials": {
+        "crypto": {
+          "id": "vaHmacSecret0001",
+          "name": "VA webhook HMAC"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verify the voice engine's HMAC (computed by the HMAC node) and timestamp, then parse the payload.\nconst it = $input.first().json;\nconst h = it.headers || {};\nconst sig = String(h['x-va-signature'] || '');\nconst exp = String(it.expected_sig || '');\nlet diff = sig.length === exp.length && sig.length === 64 ? 0 : 1;\nfor (let i = 0; i < Math.min(sig.length, exp.length); i++) diff |= sig.charCodeAt(i) ^ exp.charCodeAt(i);\nconst ts = Number(h['x-va-timestamp']);\nconst fresh = Number.isFinite(ts) && Math.abs(Date.now() / 1000 - ts) <= 300;\nlet req = null;\nif (diff === 0 && fresh) {\n  try { req = JSON.parse(String((it.body || {}).payload || '')); } catch (e) { req = null; }\n}\nconst ok = diff === 0 && fresh && req !== null && typeof req === 'object' && !Array.isArray(req);\nreturn [{ json: {\n  ok,\n  req: ok ? req : null,\n  idem: String(h['x-va-idempotency-key'] || '').slice(0, 200),\n  reason: ok ? '' : (diff !== 0 ? 'bad signature' : !fresh ? 'stale or missing timestamp' : 'payload is not a JSON object'),\n} }];\n"
+      },
+      "id": "ef4266a3-c0d9-573e-bd06-6826cbb819f6",
+      "name": "Verify request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 2,
+        "output": "={{ $json.ok ? 0 : 1 }}"
+      },
+      "id": "cfa21572-8466-5279-8d18-1b98e2e51f36",
+      "name": "Authorized?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, error: $json.reason }) }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "e6d9ab37-6e87-5feb-aa83-b994d604d8d7",
+      "name": "Reject",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1200,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "function normPhone(p) {\n  let n = String(p || '').replace(/[\\s\\-()]/g, '');\n  if (!n) return null;\n  if (n.startsWith('00')) n = '+' + n.slice(2);\n  else if (n.startsWith('0')) n = '+92' + n.slice(1);\n  else if (n.startsWith('92')) n = '+' + n;\n  return /^\\+[1-9][0-9]{6,14}$/.test(n) ? n : null;\n}\nconst UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\n\n// Validate the tool call (business rules on inputs) before touching the database.\nconst v = $input.first().json;\nconst r = v.req;\nconst tool = String(r.tool || '');\nconst a = (r.arguments && typeof r.arguments === 'object' && !Array.isArray(r.arguments)) ? r.arguments : {};\nconst fail = (msg) => [{ json: { route: 'respond', idem: v.idem, response: { ok: false, error: msg } } }];\nconst TOOLS = [\"get_menu\", \"lookup_order\", \"create_order\", \"confirm_order\", \"check_availability\", \"create_booking\", \"remember_customer_preference\", \"request_human_handoff\"];\nif (!UUID_RE.test(String(r.business_id || '')) || !r.session_id) return fail('bad request: business_id and session_id are required');\nif (!TOOLS.includes(tool)) return fail(`unknown tool ${tool}`);\nconst intIn = (x, lo, hi) => Number.isInteger(Number(x)) && Number(x) >= lo && Number(x) <= hi;\nconst args = {};\nif (tool === 'get_menu') {\n  args.category = String(a.category || '').toLowerCase().trim().slice(0, 40);\n} else if (tool === 'lookup_order' || tool === 'confirm_order') {\n  args.order_number = String(a.order_number || '').replace(/\\D/g, '');\n  if (!/^\\d{4,10}$/.test(args.order_number)) return fail('order_number must be 4 to 10 digits; ask the caller to repeat it');\n  if (tool === 'confirm_order') {\n    if (!['confirm', 'cancel'].includes(a.decision)) return fail('decision must be confirm or cancel');\n    args.decision = a.decision;\n  }\n} else if (tool === 'create_order') {\n  const items = Array.isArray(a.items) ? a.items : [];\n  if (items.length < 1 || items.length > 20) return fail('an order needs 1 to 20 items');\n  args.items = [];\n  for (const x of items) {\n    const sku = String((x || {}).sku || '').toUpperCase().trim();\n    if (!/^[A-Z0-9][A-Z0-9-]{1,31}$/.test(sku)) return fail(`invalid sku \"${sku}\"; use SKUs from get_menu`);\n    if (!intIn((x || {}).quantity, 1, 20)) return fail(`quantity for ${sku} must be 1 to 20`);\n    args.items.push({ sku, quantity: Number(x.quantity) });\n  }\n  args.delivery_address = String(a.delivery_address || '').trim().slice(0, 300);\n  if (args.delivery_address.length < 5) return fail('a delivery address is required; ask the caller for it');\n  args.customer_name = String(a.customer_name || '').trim().slice(0, 120) || null;\n  args.customer_phone = a.customer_phone ? normPhone(a.customer_phone) : null;\n  if (a.customer_phone && !args.customer_phone) return fail('the phone number is not valid; ask the caller to repeat it');\n} else if (tool === 'check_availability' || tool === 'create_booking') {\n  const date = String(a.date || ''), time = String(a.time || '');\n  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(date) || isNaN(Date.parse(date + 'T00:00:00Z'))) return fail('date must be YYYY-MM-DD');\n  if (!/^([01]\\d|2[0-3]):[0-5]\\d$/.test(time)) return fail('time must be HH:MM (24 hour)');\n  if (!intIn(a.party_size, 1, 50)) return fail('party_size must be 1 to 50');\n  Object.assign(args, { date, time, party_size: Number(a.party_size) });\n  if (tool === 'create_booking') {\n    args.name = String(a.name || '').trim().slice(0, 120);\n    if (!args.name) return fail('a name for the booking is required');\n    args.customer_phone = a.customer_phone ? normPhone(a.customer_phone) : null;\n  }\n} else if (tool === 'remember_customer_preference') {\n  args.note = String(a.note || '').trim().slice(0, 500);\n  if (!args.note) return fail('note is empty');\n} else if (tool === 'request_human_handoff') {\n  args.reason = String(a.reason || '').trim().slice(0, 500) || 'caller asked for a human';\n}\nreturn [{ json: { route: 'db', tool, args, business_id: r.business_id, session_id: String(r.session_id), idem: v.idem } }];\n"
+      },
+      "id": "515238ed-2925-5dfe-8d03-402d12bf0b2f",
+      "name": "Prepare tool call",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 2,
+        "output": "={{ $json.route === 'db' ? 0 : 1 }}"
+      },
+      "id": "d0209765-9d8c-5c85-b1f3-51b0b6381abc",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        1440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH r AS (SELECT $1::jsonb AS j)\nSELECT\n  EXISTS (SELECT 1 FROM va.calls c, r WHERE c.id = r.j->>'session_id' AND c.business_id::text = r.j->>'business_id') AS authorized,\n  (SELECT k.response FROM va.idempotency_keys k, r WHERE k.key = r.j->>'idem' AND r.j->>'idem' <> '') AS replay,\n  (SELECT c.customer_id FROM va.calls c, r WHERE c.id = r.j->>'session_id' AND c.business_id::text = r.j->>'business_id') AS customer_id",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json) ] }}"
+        }
+      },
+      "id": "966c1a3f-b4bf-5ae3-9e28-2224efb004f5",
+      "name": "Authorize session",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        1680,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "vaPgApp000000001",
+          "name": "VA Postgres (va_app)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $('Prepare tool call').first().json;\nconst row = $input.first().json;\nif (row.replay) return [{ json: { route: 'respond', replay: true, response: row.replay } }];\nif (!row.authorized) return [{ json: { route: 'respond', response: { ok: false, error: 'session is not active for this business' } } }];\nreturn [{ json: { ...p, customer_id: row.customer_id || null } }];\n"
+      },
+      "id": "72f8f7b5-9c10-5181-95e6-8913544ee18a",
+      "name": "Route tool",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 9,
+        "output": "={{ [\"get_menu\", \"lookup_order\", \"create_order\", \"confirm_order\", \"check_availability\", \"create_booking\", \"remember_customer_preference\", \"request_human_handoff\"].indexOf($json.tool) >= 0 && $json.route !== 'respond' ? [\"get_menu\", \"lookup_order\", \"create_order\", \"confirm_order\", \"check_availability\", \"create_booking\", \"remember_customer_preference\", \"request_human_handoff\"].indexOf($json.tool) : 8 }}"
+      },
+      "id": "5914c11a-d91e-59b8-a0c7-daa00bb02b78",
+      "name": "Tool",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        2160,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH r AS (SELECT $1::jsonb AS j),\nins AS (\n  INSERT INTO va.idempotency_keys (key, endpoint, response)\n  SELECT r.j->>'idem', 'tool', r.j->'response' FROM r\n  WHERE COALESCE(r.j->>'idem', '') <> '' AND NOT COALESCE((r.j->>'replay')::boolean, false)\n  ON CONFLICT (key) DO NOTHING\n  RETURNING 1)\nSELECT (SELECT r.j->'response' FROM r) AS response, (SELECT count(*) FROM ins) AS stored",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify({ idem: $('Prepare tool call').first().json.idem, replay: Boolean($json.replay), response: $json.response }) ] }}"
+        }
+      },
+      "id": "e9c3b1f1-7520-5f3b-b54f-2e7f4330a40a",
+      "name": "Store response",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        3600,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "vaPgApp000000001",
+          "name": "VA Postgres (va_app)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.response) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "e9f2eb21-e276-5b91-80cf-fc21f1389ed6",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3840,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH r AS (SELECT $1::jsonb AS j)\nSELECT COALESCE(jsonb_agg(jsonb_build_object('sku', p.sku, 'name', p.name_en, 'name_ur', p.name_ur,\n                                              'category', p.category, 'price_pkr', p.price_pkr) ORDER BY p.sort_order),\n                '[]'::jsonb) AS items\nFROM va.products p, r\nWHERE p.business_id::text = r.j->>'business_id' AND p.available\n  AND (COALESCE(r.j->'args'->>'category', '') = '' OR p.category = r.j->'args'->>'category')",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json) ] }}"
+        }
+      },
+      "id": "eaae448f-a689-55a1-9e14-a86aa23a375f",
+      "name": "Menu",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        2000,
+        -400
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "vaPgApp000000001",
+          "name": "VA Postgres (va_app)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.first().json.items || [];\nreturn [{ json: { response: { ok: true, result: {\n  currency: 'PKR', items,\n  note: items.length ? 'Offer only these items.' : 'Nothing in that category. Offer get_menu without a category.',\n} } } }];\n"
+      },
+      "id": "12a3a78a-ed41-5418-911c-647c42897b83",
+      "name": "Menu result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        -400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH r AS (SELECT $1::jsonb AS j)\nSELECT (\n  SELECT jsonb_build_object(\n    'order_number', o.order_number, 'status', o.status, 'eta_minutes', o.eta_minutes,\n    'total_pkr', o.total_pkr, 'delivery_address', o.delivery_address,\n    'items', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', p.name_en, 'quantity', i.quantity)), '[]'::jsonb)\n              FROM va.order_items i JOIN va.products p ON p.id = i.product_id WHERE i.order_id = o.id))\n  FROM va.orders o, r\n  WHERE o.business_id::text = r.j->>'business_id' AND o.order_number = r.j->'args'->>'order_number'\n) AS found_order",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json) ] }}"
+        }
+      },
+      "id": "05add19b-ed44-56b0-91e2-583963b00ed9",
+      "name": "Find order",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        2000,
+        -230
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "vaPgApp000000001",
+          "name": "VA Postgres (va_app)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const o = $input.first().json.found_order;\nreturn [{ json: { response: o ? { ok: true, result: { found: true, ...o } }\n                              : { ok: true, result: { found: false, note: 'No order with that number. Ask the caller to check it.' } } } }];\n"
+      },
+      "id": "98767e7f-fd4c-5720-8983-afd49228b58b",
+      "name": "Order result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        -230
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH r AS (SELECT $1::jsonb AS j),\nreq AS (SELECT x->>'sku' AS sku, (x->>'quantity')::int AS quantity\n        FROM r, jsonb_array_elements(r.j->'args'->'items') x)\nSELECT\n  (SELECT COALESCE(jsonb_agg(jsonb_build_object('sku', req.sku, 'quantity', req.quantity, 'product_id', p.id,\n                                                'name', p.name_en, 'price_pkr', p.price_pkr, 'available', p.available)),\n                   '[]'::jsonb)\n     FROM req LEFT JOIN va.products p ON p.sku = req.sku AND p.business_id::text = (SELECT j->>'business_id' FROM r)) AS lines,\n  (SELECT a.delivery_eta_minutes FROM va.agent_configs a, r WHERE a.business_id::text = r.j->>'business_id') AS eta",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json) ] }}"
+        }
+      },
+      "id": "99dec11e-e0d0-5b90-aa8f-01e5c062dce8",
+      "name": "Price items",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        2000,
+        -60
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "vaPgApp000000001",
+          "name": "VA Postgres (va_app)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Business rules for a new order: every item must exist and be available; total computed here.\nconst p = $('Route tool').first().json;\nconst row = $input.first().json;\nconst lines = row.lines || [];\nconst unknown = lines.filter(l => !l.product_id).map(l => l.sku);\nconst unavailable = lines.filter(l => l.product_id && !l.available).map(l => l.name);\nif (unknown.length) return [{ json: { ok: false, response: { ok: false, error: `not on the menu: ${unknown.join(', ')}. Call get_menu and use its SKUs.` } } }];\nif (unavailable.length) return [{ json: { ok: false, response: { ok: false, error: `currently unavailable: ${unavailable.join(', ')}` } } }];\nconst phone = p.args.customer_phone || null;\nif (!p.customer_id && !phone) return [{ json: { ok: false, response: { ok: false, error: 'the caller is not identified; ask for their phone number and pass customer_phone' } } }];\nconst total = lines.reduce((s, l) => s + Number(l.price_pkr) * Number(l.quantity), 0);\nreturn [{ json: { ok: true, business_id: p.business_id, session_id: p.session_id, customer_id: p.customer_id,\n  phone, name: p.args.customer_name, address: p.args.delivery_address, total: Math.round(total * 100) / 100,\n  eta: row.eta || 40, lines } }];\n"
+      },
+      "id": "ddb6cae6-b15e-5ae4-8659-ebae06d15b3f",
+      "name": "Check order",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        -60
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 2,
+        "output": "={{ $json.ok ? 0 : 1 }}"
+      },
+      "id": "094fd112-466b-5d19-978a-1d4114400450",
+      "name": "Order ok?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        2480,
+        -60
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH r AS (SELECT $1::jsonb AS j),\ncust AS (\n  INSERT INTO va.customers (business_id, phone_e164, name)\n  SELECT (r.j->>'business_id')::uuid, r.j->>'phone', NULLIF(r.j->>'name', '') FROM r\n  WHERE r.j->>'phone' IS NOT NULL\n  ON CONFLICT (business_id, phone_e164) DO UPDATE SET name = COALESCE(EXCLUDED.name, va.customers.name)\n  RETURNING id),\nnum AS (\n  SELECT (COALESCE(max(o.order_number::bigint), 1000) + 1)::text AS n\n  FROM va.orders o, r WHERE o.business_id::text = r.j->>'business_id'),\no AS (\n  INSERT INTO va.orders (business_id, order_number, customer_id, status, delivery_address, total_pkr,\n                         eta_minutes, created_via_call_id)\n  SELECT (r.j->>'business_id')::uuid, num.n,\n         COALESCE((SELECT id FROM cust), NULLIF(r.j->>'customer_id', '')::uuid),\n         'confirmed', r.j->>'address', (r.j->>'total')::numeric, (r.j->>'eta')::int, r.j->>'session_id'\n  FROM r, num\n  RETURNING id, business_id, order_number, total_pkr, eta_minutes, customer_id),\nitems AS (\n  INSERT INTO va.order_items (business_id, order_id, product_id, quantity, unit_price_pkr)\n  SELECT o.business_id, o.id, (l->>'product_id')::uuid, (l->>'quantity')::int, (l->>'price_pkr')::numeric\n  FROM o, r, jsonb_array_elements(r.j->'lines') l\n  RETURNING 1),\nlink AS (\n  UPDATE va.calls c SET customer_id = o.customer_id\n  FROM o, r WHERE c.id = r.j->>'session_id' AND c.business_id = o.business_id AND c.customer_id IS NULL\n  RETURNING 1)\nSELECT o.order_number, o.total_pkr, o.eta_minutes, (SELECT count(*) FROM items) AS item_lines,\n       (SELECT count(*) FROM link) AS call_linked\nFROM o",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json) ] }}"
+        }
+      },
+      "id": "55a79bcc-099d-5978-bf20-e52eb38788d2",
+      "name": "Insert order",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        2720,
+        -60
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "vaPgApp000000001",
+          "name": "VA Postgres (va_app)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const o = $input.first().json;\nreturn [{ json: { response: { ok: true, result: {\n  order_number: o.order_number, total_pkr: Number(o.total_pkr), eta_minutes: o.eta_minutes, status: 'confirmed',\n  note: 'Tell the caller the order number, the total and the delivery time.',\n} } } }];\n"
+      },
+      "id": "4cc076cd-e52b-5b35-96d7-ee2a596ffe72",
+      "name": "Order created",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2960,
+        -60
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH r AS (SELECT $1::jsonb AS j),\nu AS (\n  UPDATE va.orders o\n  SET status = CASE WHEN r.j->'args'->>'decision' = 'cancel' THEN 'cancelled' ELSE 'confirmed' END\n  FROM r\n  WHERE o.business_id::text = r.j->>'business_id' AND o.order_number = r.j->'args'->>'order_number'\n    AND o.status = 'pending'\n  RETURNING o.order_number, o.status)\nSELECT (SELECT to_jsonb(u) FROM u) AS updated,\n       (SELECT o.status FROM va.orders o, r\n        WHERE o.business_id::text = r.j->>'business_id' AND o.order_number = r.j->'args'->>'order_number') AS previous_status",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json) ] }}"
+        }
+      },
+      "id": "753d00c6-04b2-5d0f-b192-9f9821478eff",
+      "name": "Update order",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        2000,
+        110
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "vaPgApp000000001",
+          "name": "VA Postgres (va_app)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Rule: only pending orders can be confirmed or cancelled by the agent.\nconst row = $input.first().json;\nif (row.updated) return [{ json: { response: { ok: true, result: row.updated } } }];\nif (!row.previous_status) return [{ json: { response: { ok: true, result: { found: false, note: 'No order with that number.' } } } }];\nreturn [{ json: { response: { ok: false, error: `order is already ${row.previous_status}; it cannot be changed by phone. Offer a human if needed.` } } }];\n"
+      },
+      "id": "4368ec6b-6a9d-598e-b9b0-bd779a1f1b13",
+      "name": "Confirm result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        110
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH r AS (SELECT $1::jsonb AS j),\nb AS (SELECT bz.id, bz.timezone FROM va.businesses bz, r WHERE bz.id::text = r.j->>'business_id'),\na AS (SELECT ac.* FROM va.agent_configs ac JOIN b ON ac.business_id = b.id),\nt AS (SELECT ((r.j->'args'->>'date') || ' ' || (r.j->'args'->>'time'))::timestamp AT TIME ZONE b.timezone AS starts_at\n      FROM r, b)\nSELECT\n  (SELECT starts_at FROM t) AS starts_at,\n  (SELECT now()) AS now,\n  (SELECT jsonb_build_object('capacity', booking_capacity_per_slot, 'slot_minutes', booking_slot_minutes,\n                             'opening_time', to_char(opening_time, 'HH24:MI'), 'closing_time', to_char(closing_time, 'HH24:MI'))\n     FROM a) AS cfg,\n  (SELECT COALESCE(sum(bk.party_size), 0) FROM va.bookings bk, a, t\n    WHERE bk.business_id = a.business_id AND bk.status = 'confirmed'\n      AND bk.starts_at > t.starts_at - make_interval(mins => a.booking_slot_minutes)\n      AND bk.starts_at < t.starts_at + make_interval(mins => a.booking_slot_minutes)) AS seats_taken",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json) ] }}"
+        }
+      },
+      "id": "640f8470-edc6-563b-85f3-f3ca7ac0b8aa",
+      "name": "Booking load",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        2000,
+        280
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "vaPgApp000000001",
+          "name": "VA Postgres (va_app)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Business rules: opening hours, not in the past, seat capacity per time slot.\nconst p = $('Route tool').first().json;\nconst row = $input.first().json;\nconst cfg = row.cfg || {};\nconst a = p.args;\nlet reason = null;\nif (!cfg.capacity) reason = 'bookings are not configured for this business';\nelse if (new Date(row.starts_at) <= new Date(row.now)) reason = 'that time is in the past';\nelse if (a.time < cfg.opening_time || a.time > cfg.closing_time) reason = `we are open ${cfg.opening_time} to ${cfg.closing_time}`;\nelse if (Number(row.seats_taken) + a.party_size > cfg.capacity) reason = 'fully booked at that time; suggest a time at least ' + cfg.slot_minutes + ' minutes earlier or later';\nconst available = reason === null;\nif (p.tool === 'check_availability' || !available) {\n  return [{ json: { book: false, response: { ok: true, result: { available, date: a.date, time: a.time, party_size: a.party_size, ...(reason ? { reason } : {}) } } } }];\n}\nreturn [{ json: { book: true, business_id: p.business_id, session_id: p.session_id, customer_id: p.customer_id,\n  phone: a.customer_phone, name: a.name, party_size: a.party_size, starts_at: row.starts_at } }];\n"
+      },
+      "id": "95a3f879-04d0-5827-8f7f-140cb20a359a",
+      "name": "Decide booking",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 2,
+        "output": "={{ $json.book ? 0 : 1 }}"
+      },
+      "id": "c2ff95c7-76ac-5166-b6d4-f74559969483",
+      "name": "Book?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        2480,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH r AS (SELECT $1::jsonb AS j),\ncust AS (\n  INSERT INTO va.customers (business_id, phone_e164, name)\n  SELECT (r.j->>'business_id')::uuid, r.j->>'phone', NULLIF(r.j->>'name', '') FROM r\n  WHERE r.j->>'phone' IS NOT NULL\n  ON CONFLICT (business_id, phone_e164) DO UPDATE SET name = COALESCE(va.customers.name, EXCLUDED.name)\n  RETURNING id),\nref AS (\n  SELECT 'BK-' || (COALESCE(max(substring(bk.booking_ref FROM 4)::bigint), 1000) + 1) AS v\n  FROM va.bookings bk, r WHERE bk.business_id::text = r.j->>'business_id'),\nbk AS (\n  INSERT INTO va.bookings (business_id, booking_ref, customer_id, name, starts_at, party_size, created_via_call_id)\n  SELECT (r.j->>'business_id')::uuid, ref.v, COALESCE((SELECT id FROM cust), NULLIF(r.j->>'customer_id', '')::uuid),\n         r.j->>'name', (r.j->>'starts_at')::timestamptz, (r.j->>'party_size')::int, r.j->>'session_id'\n  FROM r, ref\n  RETURNING booking_ref, party_size, starts_at, business_id)\nSELECT bk.booking_ref, bk.party_size,\n       to_char(bk.starts_at AT TIME ZONE (SELECT timezone FROM va.businesses WHERE id = bk.business_id), 'YYYY-MM-DD HH24:MI') AS local_time\nFROM bk",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json) ] }}"
+        }
+      },
+      "id": "1c2785a4-242b-5e48-99b7-25d66a187c9a",
+      "name": "Insert booking",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        2720,
+        280
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "vaPgApp000000001",
+          "name": "VA Postgres (va_app)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json;\nreturn [{ json: { response: { ok: true, result: { booked: true, booking_ref: b.booking_ref, time: b.local_time,\n  party_size: b.party_size, note: 'Tell the caller the booking reference.' } } } }];\n"
+      },
+      "id": "f4383973-48ca-5306-80f6-f561062e382c",
+      "name": "Booking created",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2960,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH r AS (SELECT $1::jsonb AS j),\nm AS (\n  INSERT INTO va.customer_memory (business_id, customer_id, kind, content, source_call_id)\n  SELECT (r.j->>'business_id')::uuid, (r.j->>'customer_id')::uuid, 'preference', r.j->'args'->>'note', r.j->>'session_id'\n  FROM r WHERE NULLIF(r.j->>'customer_id', '') IS NOT NULL\n  RETURNING 1)\nSELECT (SELECT count(*) FROM m) AS saved",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json) ] }}"
+        }
+      },
+      "id": "76587b72-813c-5218-a235-fd1e03c65699",
+      "name": "Save preference",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        2000,
+        620
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "vaPgApp000000001",
+          "name": "VA Postgres (va_app)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const saved = Number($input.first().json.saved) > 0;\nreturn [{ json: { response: saved ? { ok: true, result: { saved: true } }\n  : { ok: false, error: 'the caller is not identified (no phone number), so nothing can be remembered' } } }];\n"
+      },
+      "id": "2c2670e3-ac65-588d-a80b-6aac295c226a",
+      "name": "Preference result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH r AS (SELECT $1::jsonb AS j),\nh AS (\n  INSERT INTO va.handoff_requests (business_id, call_id, customer_id, reason)\n  SELECT (r.j->>'business_id')::uuid, r.j->>'session_id', NULLIF(r.j->>'customer_id', '')::uuid, r.j->'args'->>'reason'\n  FROM r\n  RETURNING id, business_id, reason, call_id),\nn AS (\n  INSERT INTO va.notifications (business_id, kind, payload)\n  SELECT h.business_id, 'human_handoff', jsonb_build_object('handoff_id', h.id, 'reason', h.reason, 'call_id', h.call_id)\n  FROM h\n  RETURNING 1)\nSELECT (SELECT id FROM h) AS handoff_id, (SELECT count(*) FROM n) AS notified",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json) ] }}"
+        }
+      },
+      "id": "74c8ecd6-2b41-5811-9de6-c99cd4d6faeb",
+      "name": "Create handoff",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        2000,
+        790
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "vaPgApp000000001",
+          "name": "VA Postgres (va_app)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { response: { ok: true, result: { queued: true, handoff_id: $input.first().json.handoff_id,\n  note: 'A team member has been notified and will call the customer back. Live transfer is not available.' } } } }];\n"
+      },
+      "id": "a0782019-560d-5097-8c0c-2cd8ba745c5f",
+      "name": "Handoff result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        790
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "HMAC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HMAC": {
+      "main": [
+        [
+          {
+            "node": "Verify request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify request": {
+      "main": [
+        [
+          {
+            "node": "Authorized?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Authorized?": {
+      "main": [
+        [
+          {
+            "node": "Prepare tool call",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare tool call": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Authorize session",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Store response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Authorize session": {
+      "main": [
+        [
+          {
+            "node": "Route tool",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route tool": {
+      "main": [
+        [
+          {
+            "node": "Tool",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store response": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool": {
+      "main": [
+        [
+          {
+            "node": "Menu",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Find order",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Price items",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update order",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Booking load",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Booking load",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Save preference",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create handoff",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Store response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Menu": {
+      "main": [
+        [
+          {
+            "node": "Menu result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Menu result": {
+      "main": [
+        [
+          {
+            "node": "Store response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find order": {
+      "main": [
+        [
+          {
+            "node": "Order result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Order result": {
+      "main": [
+        [
+          {
+            "node": "Store response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Price items": {
+      "main": [
+        [
+          {
+            "node": "Check order",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check order": {
+      "main": [
+        [
+          {
+            "node": "Order ok?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Order ok?": {
+      "main": [
+        [
+          {
+            "node": "Insert order",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Store response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert order": {
+      "main": [
+        [
+          {
+            "node": "Order created",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Order created": {
+      "main": [
+        [
+          {
+            "node": "Store response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update order": {
+      "main": [
+        [
+          {
+            "node": "Confirm result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirm result": {
+      "main": [
+        [
+          {
+            "node": "Store response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Booking load": {
+      "main": [
+        [
+          {
+            "node": "Decide booking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide booking": {
+      "main": [
+        [
+          {
+            "node": "Book?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Book?": {
+      "main": [
+        [
+          {
+            "node": "Insert booking",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Store response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert booking": {
+      "main": [
+        [
+          {
+            "node": "Booking created",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Booking created": {
+      "main": [
+        [
+          {
+            "node": "Store response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save preference": {
+      "main": [
+        [
+          {
+            "node": "Preference result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preference result": {
+      "main": [
+        [
+          {
+            "node": "Store response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create handoff": {
+      "main": [
+        [
+          {
+            "node": "Handoff result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handoff result": {
+      "main": [
+        [
+          {
+            "node": "Store response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "vaWfErrors000001"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

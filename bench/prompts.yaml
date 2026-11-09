@@ -1,0 +1,105 @@
+# Benchmark material.
+#
+# stt_read: NOT USED by the notebook any more (2026-11-08). STT is benchmarked on existing
+# public data instead: FLEURS + the UrduSpeech benchmark (code-switched, Urdu, Pakistani English).
+# Kept for optional own recordings via `python -m bench.datasets own`.
+#   - `read` is what the speaker sees. Mixed prompts are shown in Roman Urdu because
+#     that is how code-switched speech is normally written; the speaker says it naturally.
+#   - `refs` are acceptable reference transcripts; WER is the minimum over refs
+#     (Urdu-script-only vs Urdu script with Latin English words are both legitimate
+#     transcriptions of mixed speech).
+#   - `keywords`: business-critical terms; each group is a list of acceptable spellings.
+
+stt_read:
+  - {id: en1, language: en, read: "Hi, I want to check the status of my order number four eight two one.",
+     refs: ["hi i want to check the status of my order number four eight two one", "hi i want to check the status of my order number 4821"],
+     keywords: [["4821", "four eight two one"], ["order"]]}
+  - {id: en2, language: en, read: "Can I book a table for four people tomorrow at eight pm?",
+     refs: ["can i book a table for four people tomorrow at eight pm", "can i book a table for 4 people tomorrow at 8 pm"],
+     keywords: [["four", "4"], ["tomorrow"], ["eight", "8"]]}
+  - {id: en3, language: en, read: "I'd like to cancel my order, please.",
+     refs: ["i d like to cancel my order please", "i would like to cancel my order please"], keywords: [["cancel"]]}
+  - {id: en4, language: en, read: "Do you deliver to Gulshan-e-Iqbal?",
+     refs: ["do you deliver to gulshan e iqbal"], keywords: [["deliver"], ["gulshan"]]}
+  - {id: en5, language: en, read: "What are your opening hours on Sunday?",
+     refs: ["what are your opening hours on sunday"], keywords: [["sunday"], ["hours"]]}
+  - {id: en6, language: en, read: "Please connect me to a human agent.",
+     refs: ["please connect me to a human agent"], keywords: [["human"]]}
+  - {id: en7, language: en, read: "My phone number is zero three zero zero, one two three, four five six seven.",
+     refs: ["my phone number is zero three zero zero one two three four five six seven", "my phone number is 0300 123 4567"],
+     keywords: [["0300", "zero three zero zero"], ["4567", "four five six seven"]]}
+  - {id: en8, language: en, read: "Yes, that's correct, please confirm it.",
+     refs: ["yes that s correct please confirm it", "yes that is correct please confirm it"], keywords: [["confirm"], ["correct"]]}
+
+  - {id: ur1, language: ur, read: "السلام علیکم، میں اپنے آرڈر کے بارے میں پوچھنا چاہتا ہوں۔",
+     refs: ["السلام علیکم میں اپنے آرڈر کے بارے میں پوچھنا چاہتا ہوں"], keywords: [["آرڈر", "order"]]}
+  - {id: ur2, language: ur, read: "کیا کل رات آٹھ بجے چار لوگوں کے لیے میز مل سکتی ہے؟",
+     refs: ["کیا کل رات آٹھ بجے چار لوگوں کے لیے میز مل سکتی ہے"], keywords: [["آٹھ", "8"], ["چار", "4"], ["کل"]]}
+  - {id: ur3, language: ur, read: "میرا آرڈر ابھی تک نہیں پہنچا، کتنی دیر اور لگے گی؟",
+     refs: ["میرا آرڈر ابھی تک نہیں پہنچا کتنی دیر اور لگے گی"], keywords: [["آرڈر", "order"], ["نہیں"]]}
+  - {id: ur4, language: ur, read: "مجھے یہ آرڈر منسوخ کرنا ہے۔",
+     refs: ["مجھے یہ آرڈر منسوخ کرنا ہے"], keywords: [["منسوخ", "کینسل", "cancel"]]}
+  - {id: ur5, language: ur, read: "آپ کی دکان اتوار کو کتنے بجے کھلتی ہے؟",
+     refs: ["آپ کی دکان اتوار کو کتنے بجے کھلتی ہے"], keywords: [["اتوار"]]}
+  - {id: ur6, language: ur, read: "براہ کرم میری بات کسی انسان سے کروا دیں۔",
+     refs: ["براہ کرم میری بات کسی انسان سے کروا دیں"], keywords: [["انسان"]]}
+  - {id: ur7, language: ur, read: "جی ہاں، بالکل ٹھیک ہے، آرڈر کنفرم کر دیں۔",
+     refs: ["جی ہاں بالکل ٹھیک ہے آرڈر کنفرم کر دیں"], keywords: [["کنفرم", "confirm"], ["ٹھیک"]]}
+  - {id: ur8, language: ur, read: "میرا نمبر صفر تین سو، ایک دو تین، چار پانچ چھ سات ہے۔",
+     refs: ["میرا نمبر صفر تین سو ایک دو تین چار پانچ چھ سات ہے", "میرا نمبر 0300 123 4567 ہے"],
+     keywords: [["0300", "صفر تین سو"], ["4567", "چار پانچ چھ سات"]]}
+
+  - {id: mx1, language: ur, read: "Mera order kab tak deliver hoga? Order number four eight two one hai.",
+     refs: ["میرا آرڈر کب تک ڈیلیور ہوگا آرڈر نمبر فور ایٹ ٹو ون ہے", "میرا order کب تک deliver ہوگا order number four eight two one ہے", "میرا آرڈر کب تک ڈیلیور ہوگا آرڈر نمبر 4821 ہے"],
+     keywords: [["آرڈر", "order"], ["ڈیلیور", "deliver"], ["4821", "فور ایٹ ٹو ون", "four eight two one"]]}
+  - {id: mx2, language: ur, read: "Kal raat ke liye table book karna hai, four people hain.",
+     refs: ["کل رات کے لیے ٹیبل بک کرنا ہے فور پیپل ہیں", "کل رات کے لیے table book کرنا ہے four people ہیں"],
+     keywords: [["ٹیبل", "table"], ["بک", "book"]]}
+  - {id: mx3, language: ur, read: "Payment JazzCash se ho sakti hai ya cash on delivery hi hai?",
+     refs: ["پیمنٹ جاز کیش سے ہو سکتی ہے یا کیش آن ڈیلیوری ہی ہے", "payment jazzcash سے ہو سکتی ہے یا cash on delivery ہی ہے"],
+     keywords: [["جاز کیش", "jazzcash", "jazz cash"], ["کیش آن ڈیلیوری", "cash on delivery"]]}
+  - {id: mx4, language: ur, read: "Please mera order cancel kar dein, mujhe ab nahi chahiye.",
+     refs: ["پلیز میرا آرڈر کینسل کر دیں مجھے اب نہیں چاہیے", "please میرا order cancel کر دیں مجھے اب نہیں چاہیے"],
+     keywords: [["کینسل", "cancel"]]}
+  - {id: mx5, language: ur, read: "Aap ka delivery time kitna hota hai normally?",
+     refs: ["آپ کا ڈیلیوری ٹائم کتنا ہوتا ہے نارملی", "آپ کا delivery time کتنا ہوتا ہے normally"],
+     keywords: [["ڈیلیوری", "delivery"], ["ٹائم", "time"]]}
+  - {id: mx6, language: ur, read: "Mujhe kisi human agent se baat karni hai, urgent hai.",
+     refs: ["مجھے کسی ہیومن ایجنٹ سے بات کرنی ہے ارجنٹ ہے", "مجھے کسی human agent سے بات کرنی ہے urgent ہے"],
+     keywords: [["ہیومن", "human", "انسان"], ["ایجنٹ", "agent"]]}
+
+# LLM scenarios use config/dev_business.yaml (instructions, tools, fixtures).
+# `expect_tool: null` means the model should answer without a tool.
+# `expect_reply_script` is checked automatically; content quality needs human review.
+llm_scenarios:
+  - {id: l01, input_kind: en, user: "Hi, can you check order 4821 for me?",
+     expect_tool: lookup_order, expect_args: {order_id: "4821"}, expect_reply_script: en}
+  - {id: l02, input_kind: ur, user: "میرا آرڈر نمبر 4821 ہے، یہ کب تک پہنچے گا؟",
+     expect_tool: lookup_order, expect_args: {order_id: "4821"}, expect_reply_script: ur}
+  - {id: l03, input_kind: mixed, user: "میرا order 4821 کب تک deliver ہوگا؟",
+     expect_tool: lookup_order, expect_args: {order_id: "4821"}, expect_reply_script: ur}
+  - {id: l04, input_kind: roman_urdu, user: "mera order 4821 kab tak aayega?",
+     expect_tool: lookup_order, expect_args: {order_id: "4821"}, expect_reply_script: ur}
+  - {id: l05, input_kind: en, user: "I'd like a table for 4 people on 2026-11-20 at 20:00.",
+     expect_tool: check_availability, expect_args: {party_size: 4, date: "2026-11-20", time: "20:00"}, expect_reply_script: en}
+  - {id: l06, input_kind: ur, user: "مجھے کسی انسان سے بات کرنی ہے۔",
+     expect_tool: request_human_handoff, expect_args: {}, expect_reply_script: ur}
+  - {id: l07, input_kind: en, user: "What payment methods do you accept?",
+     expect_tool: null, expect_reply_script: en, expect_reply_keywords: [["jazzcash", "jazz cash"], ["cash"]]}
+  - {id: l08, input_kind: ur, user: "کیا آپ ڈیلیوری پر ڈسکاؤنٹ دیتے ہیں؟",
+     expect_tool: null, expect_reply_script: ur, review_note: "must NOT offer a discount"}
+  - {id: l09, input_kind: en, user: "Cancel order 4821 please.",
+     expect_tool: confirm_order, expect_args: {order_id: "4821", decision: cancel}, expect_reply_script: en}
+  - {id: l10, input_kind: ur, user: "آپ کی دکان کب کھلتی ہے؟",
+     expect_tool: null, expect_reply_script: ur, expect_reply_keywords: [["12", "بارہ"]]}
+
+tts_sentences:
+  - {id: t_en1, language: en, text: "Your order is out for delivery and should arrive in about fifteen minutes."}
+  - {id: t_en2, language: en, text: "I can book a table for four people tomorrow at eight pm. Shall I confirm it?"}
+  - {id: t_en3, language: en, text: "Sorry, I didn't catch that. Could you repeat your order number?"}
+  - {id: t_ur1, language: ur, text: "آپ کا آرڈر راستے میں ہے اور تقریباً پندرہ منٹ میں پہنچ جائے گا۔"}
+  - {id: t_ur2, language: ur, text: "کل رات آٹھ بجے چار لوگوں کے لیے میز دستیاب ہے۔ کیا میں بکنگ کر دوں؟"}
+  - {id: t_ur3, language: ur, text: "معذرت، میں سمجھ نہیں سکا۔ کیا آپ اپنا آرڈر نمبر دوبارہ بتا سکتے ہیں؟"}
+  - {id: t_ur4, language: ur, text: "آپ جاز کیش، ایزی پیسہ یا کیش آن ڈیلیوری سے ادائیگی کر سکتے ہیں۔"}
+  - {id: t_mx1, language: ur, text: "آپ کا order confirm ہو گیا ہے، delivery پینتیس منٹ میں ہوگی۔"}
+  - {id: t_mx2, language: ur, text: "آپ JazzCash یا cash on delivery سے payment کر سکتے ہیں۔"}

@@ -1,0 +1,251 @@
+{
+  "id": "vaWfOutbound0001",
+  "name": "VA Outbound Scheduler",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "46388d47-e8fc-5ecc-b989-3a73465b1164",
+      "name": "Every minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH due AS (\n  SELECT j.id FROM va.outbound_jobs j\n  WHERE j.status = 'pending' AND j.scheduled_at <= now() AND j.attempts < j.max_attempts\n  ORDER BY j.scheduled_at\n  LIMIT 1\n  FOR UPDATE SKIP LOCKED),\nclaimed AS (\n  UPDATE va.outbound_jobs j SET status = 'requested', attempts = j.attempts + 1\n  FROM due WHERE j.id = due.id\n  RETURNING j.*)\nSELECT COALESCE(jsonb_agg(jsonb_build_object(\n         'job_id', c.id, 'business_id', c.business_id, 'customer_id', c.customer_id, 'purpose', c.purpose,\n         'context', c.context, 'attempt', c.attempts, 'phone', cu.phone_e164,\n         'consent', cu.consent_outbound, 'opted_out', cu.opted_out_at IS NOT NULL)), '[]'::jsonb) AS jobs\nFROM claimed c JOIN va.customers cu ON cu.business_id = c.business_id AND cu.id = c.customer_id",
+        "options": {
+          "queryReplacement": "={{ [] }}"
+        }
+      },
+      "id": "534ffb6a-1434-5ab8-bacc-09826bce4b89",
+      "name": "Claim due job",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        480,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "vaPgApp000000001",
+          "name": "VA Postgres (va_app)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Business rules for outbound calls: opt-out always wins, consent required, polite calling hours.\nconst jobs = $input.first().json.jobs || [];\nif (!jobs.length) return [];\nconst j = jobs[0];\nconst hour = Number(new Intl.DateTimeFormat('en-GB', { hour: '2-digit', hour12: false, timeZone: 'Asia/Karachi' }).format(new Date()));\nconst test = j.purpose === 'manual_test';\nlet action = 'call', reason = '';\nif (j.opted_out) { action = 'skip'; reason = 'customer opted out'; }\nelse if (!j.consent && !test) { action = 'skip'; reason = 'no outbound consent recorded'; }\nelse if (!j.phone) { action = 'skip'; reason = 'customer has no phone number'; }\nelse if (!test && (hour < 10 || hour >= 21)) { action = 'defer'; reason = 'outside calling hours (10:00-21:00 PKT)'; }\nreturn [{ json: { action, reason, job: j } }];\n"
+      },
+      "id": "0c02e6ca-c2dd-57ef-bebc-739d26017872",
+      "name": "Calling rules",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 2,
+        "output": "={{ $json.action === 'call' ? 0 : 1 }}"
+      },
+      "id": "9d8640cf-4bfe-5083-8bb5-5c9bdee5b75c",
+      "name": "Call?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8765/calls",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ number: $json.job.phone, idempotency_key: $json.job.job_id + ':' + $json.job.attempt, context: Object.assign({}, $json.job.context, { business_id: $json.job.business_id, customer_id: $json.job.customer_id, job_id: $json.job.job_id, purpose: $json.job.purpose }) }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "c8494a01-587e-5ec8-b59c-b74820976ccb",
+      "name": "Request call",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "vaCallsToken0001",
+          "name": "VA voice engine calls token"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const job = $('Calling rules').first().json.job;\nconst r = $input.first().json;\nconst err = r.error ? (typeof r.error === 'string' ? r.error : (r.error.message || JSON.stringify(r.error))) : (r.call_id ? null : 'no call_id in response');\nreturn [{ json: { job_id: job.job_id, business_id: job.business_id, call_id: r.call_id || null,\n  error: err ? String(err).slice(0, 400) : null } }];\n"
+      },
+      "id": "6091dc99-af4d-52e3-9336-845eb5fa04f7",
+      "name": "Request result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH r AS (SELECT $1::jsonb AS j),\nu AS (\n  UPDATE va.outbound_jobs oj SET\n    gsm_call_id = COALESCE(NULLIF(r.j->>'call_id', ''), oj.gsm_call_id),\n    status = CASE WHEN r.j->>'error' IS NULL THEN oj.status\n                  WHEN oj.attempts < oj.max_attempts THEN 'pending' ELSE 'failed' END,\n    scheduled_at = CASE WHEN r.j->>'error' IS NULL THEN oj.scheduled_at ELSE now() + interval '10 minutes' END,\n    last_error = r.j->>'error'\n  FROM r WHERE oj.id::text = r.j->>'job_id' AND oj.business_id::text = r.j->>'business_id'\n  RETURNING oj.status)\nSELECT (SELECT status FROM u) AS status",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json) ] }}"
+        }
+      },
+      "id": "77d15cdc-fdf4-55f8-8bc0-8687cc8f3df9",
+      "name": "Record request",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        1680,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "vaPgApp000000001",
+          "name": "VA Postgres (va_app)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH r AS (SELECT $1::jsonb AS j),\nu AS (\n  UPDATE va.outbound_jobs oj SET\n    status = CASE WHEN r.j->>'action' = 'defer' THEN 'pending' ELSE 'skipped' END,\n    attempts = CASE WHEN r.j->>'action' = 'defer' THEN GREATEST(oj.attempts - 1, 0) ELSE oj.attempts END,\n    scheduled_at = CASE WHEN r.j->>'action' = 'defer' THEN now() + interval '30 minutes' ELSE oj.scheduled_at END,\n    last_error = r.j->>'reason'\n  FROM r WHERE oj.id::text = r.j->'job'->>'job_id' AND oj.business_id::text = r.j->'job'->>'business_id'\n  RETURNING oj.status)\nSELECT (SELECT status FROM u) AS status",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json) ] }}"
+        }
+      },
+      "id": "d1b919ca-f1e0-5a32-b2b0-202c10f42b8f",
+      "name": "Skip or defer",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        1680,
+        520
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "vaPgApp000000001",
+          "name": "VA Postgres (va_app)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every minute": {
+      "main": [
+        [
+          {
+            "node": "Claim due job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim due job": {
+      "main": [
+        [
+          {
+            "node": "Calling rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calling rules": {
+      "main": [
+        [
+          {
+            "node": "Call?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call?": {
+      "main": [
+        [
+          {
+            "node": "Request call",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip or defer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request call": {
+      "main": [
+        [
+          {
+            "node": "Request result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request result": {
+      "main": [
+        [
+          {
+            "node": "Record request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "vaWfErrors000001"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

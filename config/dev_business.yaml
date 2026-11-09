@@ -1,0 +1,91 @@
+# DEVELOPMENT FIXTURE ONLY (business.gateway: static).
+# In production this data comes from n8n + PostgreSQL per tenant. Tool results
+# below are canned and tagged "_fixture": true so they cannot be mistaken for
+# real business operations.
+
+business:
+  id: dev-0001
+  name: Karachi Pizza House (dev)
+  language: auto
+  max_call_seconds: 600
+  agent_instructions: |
+    You answer calls for Karachi Pizza House, a pizza delivery restaurant in Karachi.
+    You can look up and confirm existing orders, check table availability and make
+    table reservations. Opening hours are 12:00 to 23:30 every day.
+    Delivery is only within Karachi. Never offer discounts.
+  knowledge:
+    - "Delivery usually takes 35 to 45 minutes."
+    - "Payment options: cash on delivery, JazzCash, Easypaisa, card on delivery."
+    - "Large pizza serves 3 to 4 people."
+  greeting:
+    en: "Hello, this is Karachi Pizza House. This call may be recorded for quality. How can I help you?"
+    ur: "السلام علیکم، کراچی پیزا ہاؤس سے بات ہو رہی ہے۔ معیار کے لیے یہ کال ریکارڈ کی جا سکتی ہے۔ میں آپ کی کیا مدد کروں؟"
+  greeting_outbound:       # used when the agent places the call (direction: outbound)
+    en: "Hello, this is the automated assistant from Karachi Pizza House calling about your order. This call may be recorded. Is now a good time?"
+    ur: "السلام علیکم، میں کراچی پیزا ہاؤس کی خودکار اسسٹنٹ ہوں اور آپ کے آرڈر کے سلسلے میں کال کر رہی ہوں۔ یہ کال ریکارڈ کی جا سکتی ہے۔ کیا ابھی بات ہو سکتی ہے؟"
+
+customer:
+  known: true
+  name: Ahmed
+  preferred_language: ur
+  last_order: "2 large chicken tikka pizzas, 3 days ago"
+
+tools:
+  - type: function
+    function:
+      name: lookup_order
+      description: Find an order by order number to report its status.
+      parameters:
+        type: object
+        properties:
+          order_id: {type: string, description: "Order number as spoken by the caller, digits only"}
+        required: [order_id]
+  - type: function
+    function:
+      name: confirm_order
+      description: Record the caller's confirmation or cancellation of a pending order.
+      parameters:
+        type: object
+        properties:
+          order_id: {type: string}
+          decision: {type: string, enum: [confirm, cancel]}
+        required: [order_id, decision]
+  - type: function
+    function:
+      name: check_availability
+      description: Check whether a table is available.
+      parameters:
+        type: object
+        properties:
+          date: {type: string, description: "YYYY-MM-DD"}
+          time: {type: string, description: "HH:MM 24h"}
+          party_size: {type: integer, minimum: 1, maximum: 20}
+        required: [date, time, party_size]
+  - type: function
+    function:
+      name: create_booking
+      description: Reserve a table after availability is confirmed and the caller agrees.
+      parameters:
+        type: object
+        properties:
+          date: {type: string}
+          time: {type: string}
+          party_size: {type: integer}
+          name: {type: string}
+        required: [date, time, party_size, name]
+  - type: function
+    function:
+      name: request_human_handoff
+      description: Transfer to a human when the caller asks for one, is upset, or the request is out of scope.
+      parameters:
+        type: object
+        properties:
+          reason: {type: string}
+        required: [reason]
+
+tool_fixtures:
+  lookup_order: {order_id: "4821", status: out_for_delivery, eta_minutes: 15, items: "1 large fajita pizza"}
+  confirm_order: {recorded: true}
+  check_availability: {available: true, alternatives: []}
+  create_booking: {booking_ref: "DEV-BK-001"}
+  request_human_handoff: {queued: true, note: "dev fixture: no human queue exists yet"}

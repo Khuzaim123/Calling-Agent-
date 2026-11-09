@@ -1,0 +1,187 @@
+{
+  "id": "vaWfNotify000001",
+  "name": "VA Notifications",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "6df4da24-81fe-5f6f-9f45-18a4afcf65f1",
+      "name": "Every minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COALESCE(jsonb_agg(jsonb_build_object('id', n.id, 'kind', n.kind, 'payload', n.payload,\n                                             'business', b.name, 'url', i.config->>'url', 'created_at', n.created_at)),\n                '[]'::jsonb) AS items\nFROM (SELECT * FROM va.notifications WHERE NOT delivered ORDER BY id LIMIT 20) n\nJOIN va.businesses b ON b.id = n.business_id\nJOIN va.business_integrations i ON i.business_id = n.business_id AND i.kind = 'notify_webhook' AND i.active\nWHERE (i.config->>'url') ~ '^https://'",
+        "options": {
+          "queryReplacement": "={{ [] }}"
+        }
+      },
+      "id": "bd2d4f48-5b7d-556c-b8bf-6ce09296943c",
+      "name": "Pending notifications",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        480,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "vaPgApp000000001",
+          "name": "VA Postgres (va_app)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return ($input.first().json.items || []).map(n => ({ json: n }));\n"
+      },
+      "id": "ba09ea4a-d498-5dfa-aae9-ada0a3a70007",
+      "name": "One per notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: `[${$json.business}] ${$json.kind}: ${JSON.stringify($json.payload)}`, kind: $json.kind, payload: $json.payload, created_at: $json.created_at }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "f4269072-6364-5d66-adc8-845ade9f216d",
+      "name": "Send",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        300
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const sent = $('One per notification').all();\nconst results = $input.all();\nconst ids = sent.filter((n, i) => results[i] && !results[i].json.error).map(n => n.json.id);\nreturn ids.length ? [{ json: { ids } }] : [];\n"
+      },
+      "id": "074f8327-0d4e-5809-98e3-f1774e4ccbb1",
+      "name": "Delivered ids",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH r AS (SELECT $1::jsonb AS j),\nu AS (UPDATE va.notifications SET delivered = true\n      WHERE id IN (SELECT (x)::bigint FROM r, jsonb_array_elements_text(r.j->'ids') AS x) RETURNING 1)\nSELECT (SELECT count(*) FROM u) AS delivered",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json) ] }}"
+        }
+      },
+      "id": "4bb6edeb-dc91-5cb1-981a-15c2486096bf",
+      "name": "Mark delivered",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        1440,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "vaPgApp000000001",
+          "name": "VA Postgres (va_app)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every minute": {
+      "main": [
+        [
+          {
+            "node": "Pending notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pending notifications": {
+      "main": [
+        [
+          {
+            "node": "One per notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "One per notification": {
+      "main": [
+        [
+          {
+            "node": "Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send": {
+      "main": [
+        [
+          {
+            "node": "Delivered ids",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delivered ids": {
+      "main": [
+        [
+          {
+            "node": "Mark delivered",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "vaWfErrors000001"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

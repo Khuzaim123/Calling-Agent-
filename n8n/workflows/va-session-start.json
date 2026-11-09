@@ -1,0 +1,304 @@
+{
+  "id": "vaWfSessStart001",
+  "name": "VA Session Start",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "voice/session-start",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "81f168ea-49a1-5521-a45b-4926b6eb61e4",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "f17d8711-ff42-5e9e-84a2-d7032c9af8d6"
+    },
+    {
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "value": "={{ String($json.headers['x-va-timestamp'] || '') + '.' + String(($json.body || {}).payload || '') }}",
+        "dataPropertyName": "expected_sig",
+        "encoding": "hex"
+      },
+      "id": "52e5fc97-319a-5995-aaeb-4662c73f8bf0",
+      "name": "HMAC",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "credentials": {
+        "crypto": {
+          "id": "vaHmacSecret0001",
+          "name": "VA webhook HMAC"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verify the voice engine's HMAC (computed by the HMAC node) and timestamp, then parse the payload.\nconst it = $input.first().json;\nconst h = it.headers || {};\nconst sig = String(h['x-va-signature'] || '');\nconst exp = String(it.expected_sig || '');\nlet diff = sig.length === exp.length && sig.length === 64 ? 0 : 1;\nfor (let i = 0; i < Math.min(sig.length, exp.length); i++) diff |= sig.charCodeAt(i) ^ exp.charCodeAt(i);\nconst ts = Number(h['x-va-timestamp']);\nconst fresh = Number.isFinite(ts) && Math.abs(Date.now() / 1000 - ts) <= 300;\nlet req = null;\nif (diff === 0 && fresh) {\n  try { req = JSON.parse(String((it.body || {}).payload || '')); } catch (e) { req = null; }\n}\nconst ok = diff === 0 && fresh && req !== null && typeof req === 'object' && !Array.isArray(req);\nreturn [{ json: {\n  ok,\n  req: ok ? req : null,\n  idem: String(h['x-va-idempotency-key'] || '').slice(0, 200),\n  reason: ok ? '' : (diff !== 0 ? 'bad signature' : !fresh ? 'stale or missing timestamp' : 'payload is not a JSON object'),\n} }];\n"
+      },
+      "id": "785b24b9-461a-535b-824d-e5ad0a8883f5",
+      "name": "Verify request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 2,
+        "output": "={{ $json.ok ? 0 : 1 }}"
+      },
+      "id": "4e46b79c-47a9-5789-b107-21d5f6c6d2c1",
+      "name": "Authorized?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, error: $json.reason }) }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "bb3fbe85-8678-5523-ab5a-8c8d001f0364",
+      "name": "Reject",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1200,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "function normPhone(p) {\n  let n = String(p || '').replace(/[\\s\\-()]/g, '');\n  if (!n) return null;\n  if (n.startsWith('00')) n = '+' + n.slice(2);\n  else if (n.startsWith('0')) n = '+92' + n.slice(1);\n  else if (n.startsWith('92')) n = '+' + n;\n  return /^\\+[1-9][0-9]{6,14}$/.test(n) ? n : null;\n}\nconst UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\n\nconst r = $input.first().json.req;\nconst sid = String(r.session_id || '');\nconst channel = ['browser_test', 'gsm', 'sip'].includes(r.channel) ? r.channel : null;\nif (sid.length < 8 || sid.length > 64 || !channel) {\n  return [{ json: { valid: false, response: { ok: false, error: 'invalid session_id or channel' } } }];\n}\nconst ctx = (r.context && typeof r.context === 'object') ? r.context : {};\nreturn [{ json: {\n  valid: true,\n  session_id: sid,\n  channel,\n  line: String(r.line || 'default').slice(0, 64),\n  direction: r.direction === 'outbound' ? 'outbound' : 'inbound',\n  phone: normPhone((r.caller || {}).number),\n  gsm_call_id: String(r.call_id || '').slice(0, 64),\n  context_business_id: UUID_RE.test(String(ctx.business_id || '')) ? ctx.business_id : null,\n} }];\n"
+      },
+      "id": "e2dc4eb2-81aa-531a-a5cf-bbd1e211639e",
+      "name": "Prepare session",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 2,
+        "output": "={{ $json.valid ? 0 : 1 }}"
+      },
+      "id": "c615dc9f-97c4-5bf7-b25d-5f6c96882cb4",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        1440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH r AS (SELECT $1::jsonb AS j),\nbiz AS (\n  SELECT b.id, b.name\n  FROM va.businesses b, r\n  WHERE b.status = 'active'\n    AND (b.id::text = r.j->>'context_business_id'\n         OR b.id IN (SELECT n.business_id FROM va.business_phone_numbers n\n                     WHERE n.channel = r.j->>'channel' AND n.line_name = r.j->>'line'))\n  ORDER BY (b.id::text = COALESCE(r.j->>'context_business_id', '')) DESC\n  LIMIT 1),\ncust AS (\n  INSERT INTO va.customers (business_id, phone_e164)\n  SELECT biz.id, r.j->>'phone' FROM biz, r WHERE r.j->>'phone' IS NOT NULL\n  ON CONFLICT (business_id, phone_e164) DO UPDATE SET updated_at = now()\n  RETURNING id, name, preferred_language, opted_out_at),\ncall AS (\n  INSERT INTO va.calls (id, business_id, customer_id, channel, direction, remote_number, gsm_call_id)\n  SELECT r.j->>'session_id', biz.id, (SELECT id FROM cust), r.j->>'channel', r.j->>'direction',\n         r.j->>'phone', NULLIF(r.j->>'gsm_call_id', '')\n  FROM biz, r\n  ON CONFLICT (id) DO NOTHING\n  RETURNING id)\nSELECT\n  (SELECT to_jsonb(biz) FROM biz) AS business,\n  (SELECT to_jsonb(a) - 'business_id' FROM va.agent_configs a JOIN biz ON a.business_id = biz.id) AS config,\n  (SELECT COALESCE(jsonb_agg(k.title || ': ' || k.content ORDER BY k.title), '[]'::jsonb)\n     FROM va.knowledge_items k JOIN biz ON k.business_id = biz.id WHERE k.active) AS knowledge,\n  (SELECT COALESCE(jsonb_agg(jsonb_build_object('type', 'function', 'function',\n            jsonb_build_object('name', t.name, 'description', t.description, 'parameters', t.parameters))\n            ORDER BY t.name), '[]'::jsonb)\n     FROM va.tool_definitions t\n     JOIN va.agent_configs a ON t.name = ANY (a.enabled_tools)\n     JOIN biz ON a.business_id = biz.id) AS tools,\n  (SELECT to_jsonb(cust) FROM cust) AS customer,\n  (SELECT COALESCE(jsonb_agg(m.content), '[]'::jsonb) FROM (\n     SELECT content FROM va.customer_memory\n     WHERE customer_id = (SELECT id FROM cust) ORDER BY created_at DESC LIMIT 5) m) AS memory,\n  (SELECT COALESCE(jsonb_agg(jsonb_build_object('order_number', o.order_number, 'status', o.status)), '[]'::jsonb) FROM (\n     SELECT order_number, status FROM va.orders\n     WHERE customer_id = (SELECT id FROM cust) ORDER BY created_at DESC LIMIT 3) o) AS recent_orders,\n  (SELECT count(*) FROM call) AS call_created",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json) ] }}"
+        }
+      },
+      "id": "ff6c6d0a-d018-52c0-b0de-81c07499f224",
+      "name": "Load session",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        1680,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "vaPgApp000000001",
+          "name": "VA Postgres (va_app)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.first().json;\nconst req = $('Prepare session').first().json;\nif (!row.business || !row.config) {\n  return [{ json: { response: { ok: false, error: `no active business configured for ${req.channel} line \"${req.line}\"` } } }];\n}\nconst cfg = row.config;\nconst c = row.customer;\nconst customer = c ? {\n  known: Boolean(c.name), name: c.name || null, phone: req.phone,\n  preferred_language: c.preferred_language || null,\n  remembered: row.memory || [], recent_orders: row.recent_orders || [],\n} : {};\nreturn [{ json: { response: {\n  ok: true,\n  session_id: req.session_id,\n  business_id: row.business.id,\n  business_name: row.business.name,\n  agent_instructions: cfg.instructions,\n  language: cfg.language,\n  knowledge: row.knowledge || [],\n  customer,\n  tools: row.tools || [],\n  greeting: (req.direction === 'outbound' ? cfg.greeting_outbound : cfg.greeting) || {},\n  max_call_seconds: cfg.max_call_seconds,\n  recording_consent_required: cfg.recording_notice,\n} } }];\n"
+      },
+      "id": "819632d0-f7d0-5eef-8840-07526f8ebe83",
+      "name": "Build context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.response) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "182b32ee-635c-5879-867c-dd69517c557f",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2160,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.response) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "0d0a49c0-3f12-5641-8dd2-a8dc427b51d8",
+      "name": "Respond invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2160,
+        520
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "HMAC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HMAC": {
+      "main": [
+        [
+          {
+            "node": "Verify request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify request": {
+      "main": [
+        [
+          {
+            "node": "Authorized?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Authorized?": {
+      "main": [
+        [
+          {
+            "node": "Prepare session",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare session": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Load session",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load session": {
+      "main": [
+        [
+          {
+            "node": "Build context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build context": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "vaWfErrors000001"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}
